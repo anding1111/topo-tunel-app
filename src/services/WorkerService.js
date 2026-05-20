@@ -49,6 +49,14 @@ class WorkerService {
   }
 
   async startForegroundService() {
+    await this.updateNotification(
+      'Topo Túnel: Activo',
+      'Iniciando enlace del servicio...',
+      '#3b82f6'
+    );
+  }
+
+  async updateNotification(title, body, color) {
     try {
       // Create a channel (required for Android)
       const channelId = await notifee.createChannel({
@@ -57,18 +65,23 @@ class WorkerService {
         importance: AndroidImportance.LOW,
       });
 
-      // Display the notification
+      // Display or update the notification with a persistent ID
       await notifee.displayNotification({
-        title: 'Topo Túnel',
-        body: 'Activo y esperando tareas...',
+        id: 'tunnel-status-notification',
+        title: title,
+        body: body,
         android: {
           channelId,
           asForegroundService: true,
           ongoing: true,
+          color: color || '#10b981',
+          pressAction: {
+            id: 'default',
+          },
         },
       });
     } catch (e) {
-      console.error('Error starting foreground service:', e);
+      console.error('Error displaying notification:', e);
     }
   }
 
@@ -188,6 +201,37 @@ class WorkerService {
   notifyStatus(status) {
     if (this.onStatusChange) {
       this.onStatusChange(status);
+    }
+
+    if (this.isActive) {
+      let title = 'Topo Túnel: Activo';
+      let body = 'Esperando tareas de scraping...';
+      let color = '#10b981'; // Emerald 500
+
+      switch (status) {
+        case 'Conectando...':
+          title = 'Topo Túnel: Conectando';
+          body = 'Estableciendo enlace seguro con el servidor...';
+          color = '#f59e0b'; // Amber 500
+          break;
+        case 'Conectado':
+          title = 'Topo Túnel: En Línea';
+          body = 'WebSocket listo. Escuchando solicitudes...';
+          color = '#10b981'; // Emerald 500
+          break;
+        case 'Procesando Tarea':
+          title = 'Topo Túnel: Raspando';
+          body = 'Procesando solicitud de MercadoLibre en curso...';
+          color = '#3b82f6'; // Blue 500
+          break;
+        case 'Reconectando...':
+          title = 'Topo Túnel: Reconectando';
+          body = 'Conexión interrumpida. Reintentando enlace...';
+          color = '#ef4444'; // Red 500
+          break;
+      }
+
+      this.updateNotification(title, body, color);
     }
   }
 }

@@ -1,6 +1,6 @@
 import 'react-native-get-random-values';
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, StatusBar, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, StatusBar, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import notifee from '@notifee/react-native';
@@ -62,7 +62,7 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
       
       <View style={styles.header}>
@@ -98,7 +98,7 @@ export default function App() {
       >
         <Text style={styles.buttonText}>{isActive ? 'DESACTIVAR TÚNEL' : 'ACTIVAR TÚNEL'}</Text>
       </TouchableOpacity>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -109,6 +109,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
+    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 24 : 40,
   },
   header: {
     marginBottom: 48,
