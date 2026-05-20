@@ -1,63 +1,68 @@
-# 02 - Despliegue y Compilación de la Aplicación
+# 02 - Despliegue, Comandos y Compilación Novedosa
 
-Este documento detalla los comandos necesarios para desarrollar de forma local, realizar pruebas y compilar la aplicación "Topo Túnel" para producción.
+Este documento detalla la hoja de ruta exacta y los comandos necesarios para desarrollar de forma local, realizar pruebas con hardware real y compilar la aplicación "Topo Túnel" utilizando flujos nativos optimizados.
 
 ---
 
-## 1. Comandos de Desarrollo Local
+## 1. Comandos de Desarrollo Local Rápido
 
-Para correr el proyecto localmente en un simulador o en un dispositivo físico con Expo Go / Expo Dev Client:
-
-### Iniciar servidor de desarrollo Metro:
+Para correr el servidor Metro local y emparejar con el empaquetador JS:
 ```bash
 npm run start
 ```
 
-### Iniciar directamente en plataformas específicas:
-```bash
-# Android
-npm run android
+---
 
-# iOS (Requiere macOS)
-npm run ios
+## 2. 🛠️ Compilación Nativa Local (Android)
+
+Dado que la aplicación inyecta librerías como `@notifee/react-native` que requieren enlazar código nativo Java/Kotlin para soportar **Foreground Services**, **Expo Go no es compatible para pruebas en segundo plano**. Es obligatorio compilar un cliente de desarrollo directamente en el dispositivo físico.
+
+### Prerrequisitos:
+* Teléfono físico Android conectado por USB al computador.
+* **Depuración USB (USB Debugging)** activada y aceptada en la pantalla del móvil.
+* Android SDK y variables de entorno configuradas localmente (`ANDROID_HOME`).
+
+### Flujo de Compilación Paso a Paso:
+
+#### **Paso 1: Verificación de Módulos y Árbol de Dependencias**
+Antes de generar archivos nativos, nos aseguramos de que el árbol de dependencias de npm esté correctamente instalado y validado:
+```bash
+npm install
+```
+
+#### **Paso 2: Generación del Código Nativo Limpio (Prebuild)**
+Este comando lee la estructura de `app.json`, inyecta dinámicamente los plugins de Notifee y genera la carpeta `android` limpia y lista para compilar:
+```bash
+npx expo prebuild --clean --platform android
+```
+
+#### **Paso 3: Compilación y Despliegue en Dispositivo (Run)**
+Este comando inicia el demonio de Metro (empaquetador de JS) y lanza la suite Gradle para compilar el APK de desarrollo e instalarlo automáticamente en tu teléfono conectado:
+```bash
+npx expo run:android
 ```
 
 ---
 
-## 2. Requisitos de Compilación (Native Code)
+## 3. ⚠️ Notas Críticas para la Fase de Desarrollo Novedoso
 
-Dado que la aplicación implementa `@notifee/react-native` para mantener un **Foreground Service** persistente en segundo plano, **no se puede probar directamente con la app genérica de Expo Go** para producción. Es necesario realizar una compilación nativa (Dev Client o Build de Producción).
-
-### Requisitos en Android:
-* La aplicación solicitará automáticamente el permiso `FOREGROUND_SERVICE` y `POST_NOTIFICATIONS` al instalarse/ejecutarse.
-* La configuración en `app.json` ya incluye el plugin de configuración para inyectar estos permisos nativos en el `AndroidManifest.xml` durante el prebuild.
+* **Tiempo de Espera Inicial:** El primer comando `npx expo run:android` tardará bastantes minutos. Gradle descargará el núcleo de React Native, las dependencias de AndroidX necesarias y compilará la base de la app desde cero. Los siguientes comandos compilarán en cuestión de segundos gracias a la caché nativa.
+* **Permisos de Notificaciones (Android 13+):** A partir de Android 13, los permisos de notificaciones deben ser solicitados de forma explícita. Notifee requiere este permiso para poder anclar el servicio en primer plano. Cuando la app se abra en el dispositivo, asegúrate de otorgar el permiso si el sistema lo solicita.
+* **Metro Bundler Activo:** La terminal de desarrollo se quedará corriendo el servidor de Metro. Si cierras esa terminal, la app en tu teléfono dejará de funcionar en modo de desarrollo (hasta que hagamos el APK final de producción).
 
 ---
 
-## 3. Compilación para Producción (EAS Build)
+## 4. Compilación para Distribución / Producción (EAS Build)
 
-La vía recomendada para generar el instalador de Android (`.apk` o `.aab`) es utilizando **EAS Build** (Expo Application Services).
+Cuando el flujo local esté verificado y desees generar el instalador APK standalone que no requiera el cable USB ni Metro:
 
-### Paso 1: Instalar la CLI de EAS globalmente
+### Instalar EAS CLI y Autenticar:
 ```bash
 npm install -g eas-cli
-```
-
-### Paso 2: Iniciar sesión en tu cuenta de Expo
-```bash
 eas login
 ```
 
-### Paso 3: Configurar el proyecto de EAS
-Ejecuta el siguiente comando en la raíz del proyecto para generar el archivo de configuración `eas.json`:
-```bash
-eas build:configure
-```
-
-### Paso 4: Generar el APK de producción (Android)
-Para distribuir y probar el archivo de forma directa en los celulares de los operadores/workers, se recomienda configurar un perfil que exporte un archivo `.apk` (en lugar del `.aab` predeterminado de la Play Store).
-
-Agrega o edita la sección `build` en tu `eas.json` recién generado:
+### Configurar perfil en `eas.json` (Añadir perfil preview para generar APK):
 ```json
 {
   "cli": {
@@ -75,25 +80,11 @@ Agrega o edita la sección `build` en tu `eas.json` recién generado:
       }
     },
     "production": {}
-  },
-  "submit": {
-    "production": {}
   }
 }
 ```
 
-Luego ejecuta el comando para construir la compilación preview (APK):
+### Ejecutar compilación remota de APK:
 ```bash
-# Generar APK descargable de forma directa
 eas build --platform android --profile preview
-```
-
-### Paso 5: Generar compilación local (Alternativa sin EAS)
-Si tienes Android Studio configurado localmente y deseas compilar localmente:
-```bash
-# Genera las carpetas nativas /android
-npx expo prebuild
-
-# Compila y ejecuta la aplicación nativa en tu dispositivo conectado
-npx expo run:android --variant release
 ```
