@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, StatusBar, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
-import notifee from '@notifee/react-native';
+import notifee, { EventType } from '@notifee/react-native';
 import WorkerService from './src/services/WorkerService';
 
 // Register foreground service task globally
@@ -11,6 +11,14 @@ notifee.registerForegroundService(() => {
   return new Promise(() => {
     // Promise never resolves to keep the service running in the background
   });
+});
+
+// Register background event handler for notification actions
+notifee.onBackgroundEvent(async ({ type, detail }) => {
+  const { pressAction } = detail;
+  if (type === EventType.ACTION_PRESS && pressAction.id === 'stop-tunnel') {
+    await WorkerService.stop();
+  }
 });
 
 export default function App() {
@@ -31,23 +39,36 @@ export default function App() {
       WorkerService.init(
         id,
         () => setTasksCompleted(prev => prev + 1),
-        (newStatus) => setStatus(newStatus)
+        (newStatus) => {
+          setStatus(newStatus);
+          if (newStatus === 'Desconectado') {
+            setIsActive(false);
+          } else {
+            setIsActive(true);
+          }
+        }
       );
     };
     initialize();
 
+    // Register foreground event handler for notification actions
+    const unsubscribeForeground = notifee.onForegroundEvent(({ type, detail }) => {
+      if (type === EventType.ACTION_PRESS && detail.pressAction.id === 'stop-tunnel') {
+        WorkerService.stop();
+      }
+    });
+
     return () => {
       WorkerService.stop();
+      unsubscribeForeground();
     };
   }, []);
 
   const toggleTunnel = useCallback(async () => {
     if (isActive) {
       await WorkerService.stop();
-      setIsActive(false);
     } else {
       await WorkerService.start();
-      setIsActive(true);
     }
   }, [isActive]);
 
@@ -63,7 +84,7 @@ export default function App() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
+      <StatusBar barStyle="light-content" backgroundColor="#000000" />
       
       <View style={styles.header}>
         <Text style={styles.title}>Topo Túnel</Text>
@@ -105,7 +126,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a', // Slate 900
+    backgroundColor: '#000000', // Pure Black
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -123,13 +144,13 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
-    color: '#94a3b8', // Slate 400
+    color: '#64748b', // Slate 500
     marginTop: 8,
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
   card: {
-    backgroundColor: '#1e293b', // Slate 800
+    backgroundColor: '#0d0d0d', // OLED Dark Gray
     borderRadius: 24,
     padding: 32,
     width: '100%',
@@ -137,9 +158,11 @@ const styles = StyleSheet.create({
     marginBottom: 48,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.5,
     shadowRadius: 20,
     elevation: 10,
+    borderWidth: 1,
+    borderColor: '#1e293b', // Slate 800 subtle border
   },
   statusContainer: {
     flexDirection: 'row',
@@ -165,12 +188,12 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     paddingBottom: 24,
     borderBottomWidth: 1,
-    borderBottomColor: '#334155', // Slate 700
+    borderBottomColor: '#1e293b', // Slate 800 subtle line
     width: '100%',
   },
   statsLabel: {
     fontSize: 14,
-    color: '#94a3b8',
+    color: '#64748b',
     marginBottom: 8,
     textTransform: 'uppercase',
     letterSpacing: 1,
@@ -186,14 +209,14 @@ const styles = StyleSheet.create({
   },
   idLabel: {
     fontSize: 12,
-    color: '#64748b', // Slate 500
+    color: '#475569', // Slate 600
     marginBottom: 4,
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   idValue: {
     fontSize: 12,
-    color: '#94a3b8',
+    color: '#64748b',
     fontFamily: 'monospace',
   },
   button: {
@@ -204,15 +227,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 5,
   },
   buttonInactive: {
-    backgroundColor: '#3b82f6', // Blue 500
+    backgroundColor: '#2563eb', // Blue 600
   },
   buttonActive: {
-    backgroundColor: '#ef4444', // Red 500
+    backgroundColor: '#dc2626', // Red 600
   },
   buttonText: {
     color: '#ffffff',

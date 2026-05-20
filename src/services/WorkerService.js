@@ -82,6 +82,14 @@ class WorkerService {
           pressAction: {
             id: 'default',
           },
+          actions: [
+            {
+              title: 'Detener Túnel',
+              pressAction: {
+                id: 'stop-tunnel',
+              },
+            },
+          ],
         },
       });
     } catch (e) {
