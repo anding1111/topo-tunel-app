@@ -1,7 +1,7 @@
 import axios from 'axios';
 import notifee, { AndroidImportance } from '@notifee/react-native';
+import { Pusher } from '@pusher/pusher-websocket-react-native';
 
-const WS_URL = 'ws://topo.saedi.com.co:8080';
 const API_BASE = 'https://topo.saedi.com.co/api/v1/scraper';
 
 // Use a realistic mobile user agent
@@ -9,7 +9,7 @@ const MOBILE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit
 
 class WorkerService {
   constructor() {
-    this.ws = null;
+    this.pusher = null;
     this.workerId = null;
     this.isActive = false;
     this.onTaskCompleted = null;
@@ -30,8 +30,7 @@ class WorkerService {
     // Start Foreground Service
     await this.startForegroundService();
 
-    this.connectWebSocket();
-    this.notifyStatus('Conectando...');
+    this.connectPusher();
   }
 
   async stop() {
@@ -40,9 +39,14 @@ class WorkerService {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    if (this.pusher) {
+      try {
+        await this.pusher.unsubscribe({ channelName: 'scraper-tasks' });
+        await this.pusher.disconnect();
+      } catch (err) {
+        console.error('Error disconnecting Pusher:', err);
+      }
+      this.pusher = null;
     }
     await this.stopForegroundService();
     this.notifyStatus('Desconectado');
@@ -93,55 +97,59 @@ class WorkerService {
     }
   }
 
-  connectWebSocket() {
+  async connectPusher() {
     if (!this.isActive) return;
-    
-    this.ws = new WebSocket(WS_URL);
 
-    this.ws.onopen = () => {
-      this.notifyStatus('Conectado');
-      console.log('WebSocket Connected');
-      
-      // If it's Pusher/Laravel Websockets, we might need to subscribe
-      const subscribeMsg = JSON.stringify({
-        event: 'pusher:subscribe',
-        data: { channel: 'scraper-tasks' }
-      });
-      this.ws.send(subscribeMsg);
-    };
+    try {
+      this.pusher = Pusher.getInstance();
 
-    this.ws.onmessage = async (e) => {
-      try {
-        const message = JSON.parse(e.data);
-        
-        // Handle Laravel Echo / Pusher format
-        if (message.event === 'NewScrapingTask') {
-          let taskData = message.data;
-          if (typeof taskData === 'string') {
-            taskData = JSON.parse(taskData);
+      await this.pusher.init({
+        apiKey: '39c32a0c95b80ddf3123', // MISMA APP_KEY que backend y frontend web
+        cluster: 'us2',                  // MISMO cluster
+        onConnectionStateChange: (currentState, previousState) => {
+          console.log(`Pusher connection state: ${previousState} -> ${currentState}`);
+          
+          if (currentState === 'CONNECTED') {
+            this.notifyStatus('Conectado');
+          } else if (currentState === 'CONNECTING') {
+            this.notifyStatus('Conectando...');
+          } else if (currentState === 'RECONNECTING') {
+            this.notifyStatus('Reconectando...');
+          } else if (currentState === 'DISCONNECTED') {
+            this.notifyStatus('Desconectado');
           }
-          await this.processTask(taskData);
-        } else if (message.task_id && message.url) {
-          // Handle Raw format
-          await this.processTask(message);
+        },
+        onError: (message, code, error) => {
+          console.log(`Pusher error: ${message} (code ${code})`);
         }
-      } catch (error) {
-        // Ignorar mensajes no JSON o keep-alives
-      }
-    };
+      });
 
-    this.ws.onclose = (e) => {
-      console.log('WebSocket Disconnected', e.reason);
+      await this.pusher.connect();
+
+      await this.pusher.subscribe({
+        channelName: 'scraper-tasks',
+        onEvent: async (event) => {
+          console.log(`Received event: ${event.eventName}`);
+          if (event.eventName === 'NewScrapingTask') {
+            try {
+              let taskData = event.data;
+              if (typeof taskData === 'string') {
+                taskData = JSON.parse(taskData);
+              }
+              await this.processTask(taskData);
+            } catch (err) {
+              console.error('Error parsing task data:', err);
+            }
+          }
+        }
+      });
+    } catch (e) {
+      console.error('Error initializing Pusher:', e);
       if (this.isActive) {
         this.notifyStatus('Reconectando...');
-        this.reconnectTimeout = setTimeout(() => this.connectWebSocket(), 3000);
+        this.reconnectTimeout = setTimeout(() => this.connectPusher(), 3000);
       }
-    };
-
-    this.ws.onerror = (e) => {
-      console.log('WebSocket Error', e.message);
-      this.ws.close();
-    };
+    }
   }
 
   async processTask(task) {
@@ -152,34 +160,58 @@ class WorkerService {
 
     try {
       // 1. Claim the task
-      const claimRes = await axios.post(`${API_BASE}/claim`, {
-        task_id: task.task_id,
-        worker_id: this.workerId,
-      });
+      let claimRes;
+      try {
+        claimRes = await axios.post(`${API_BASE}/claim`, {
+          task_id: task.task_id,
+          worker_id: this.workerId,
+        });
+      } catch (err) {
+        console.log(`Claim failed for task ${task.task_id}:`, err.message);
+        this.notifyStatus('Conectado');
+        return; // Ignore silently (409 Conflict o similar)
+      }
 
       if (!claimRes.data || !claimRes.data.success) {
         console.log(`Task ${task.task_id} claimed by another worker.`);
         this.notifyStatus('Conectado');
-        return; // Ignore silently
+        return;
       }
 
       console.log(`Task ${task.task_id} successfully claimed. Scraping...`);
 
       // 2. Scrape the URL
-      const scrapeRes = await axios.get(task.url, {
-        headers: {
-          'User-Agent': MOBILE_USER_AGENT,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
-        },
-        timeout: 15000, // 15 seconds timeout
-      });
-
-      const html = scrapeRes.data;
+      let html;
+      try {
+        const scrapeRes = await axios.get(task.url, {
+          headers: {
+            'User-Agent': MOBILE_USER_AGENT,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
+          },
+          timeout: 15000, // 15 seconds timeout
+        });
+        html = scrapeRes.data;
+      } catch (scrapeErr) {
+        console.log(`Scraping failed for task ${task.task_id}:`, scrapeErr.message);
+        
+        // 2b. Release the task so other workers can retry
+        try {
+          await axios.post(`${API_BASE}/release`, {
+            task_id: task.task_id,
+            worker_id: this.workerId,
+          });
+          console.log(`Task ${task.task_id} successfully released.`);
+        } catch (releaseErr) {
+          console.error(`Error releasing task ${task.task_id}:`, releaseErr.message);
+        }
+        return;
+      }
 
       // 3. Callback with the HTML
       await axios.post(`${API_BASE}/callback`, {
         task_id: task.task_id,
+        worker_id: this.workerId,
         html: html,
       });
 
@@ -190,7 +222,7 @@ class WorkerService {
       }
 
     } catch (error) {
-      console.error(`Error processing task ${task.task_id}:`, error.message);
+      console.error(`Error in processTask for ${task.task_id}:`, error.message);
     } finally {
       if (this.isActive) {
         this.notifyStatus('Conectado');
