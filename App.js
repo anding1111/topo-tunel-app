@@ -57,6 +57,9 @@ export default function App() {
   // Animations
   const toggleAnim = useRef(new Animated.Value(0)).current; // 0 = Start (Top), 1 = Stop (Bottom)
   const pulseAnim = useRef(new Animated.Value(0)).current;
+  const pulseProcessingAnim = useRef(new Animated.Value(0)).current;
+
+  const isProcessing = status === 'Procesando Tarea';
 
   // Initialize WorkerService
   useEffect(() => {
@@ -142,6 +145,22 @@ export default function App() {
     }
   }, [isActive]);
 
+  useEffect(() => {
+    if (isProcessing) {
+      Animated.loop(
+        Animated.timing(pulseProcessingAnim, {
+          toValue: 1,
+          duration: 800, // Faster sci-fi pulse
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        })
+      ).start();
+    } else {
+      pulseProcessingAnim.setValue(0);
+      pulseProcessingAnim.stopAnimation();
+    }
+  }, [isProcessing]);
+
   const handleToggle = useCallback(async () => {
     if (isActive) {
       await WorkerService.stop();
@@ -170,7 +189,7 @@ export default function App() {
       {/* Top Pill / Worker ID */}
       <View style={styles.topContainer}>
         <View style={styles.workerPill}>
-          <Text style={styles.workerLabel}>Worker ID: {workerId ? workerId.substring(0, 8) : '...'}</Text>
+          <Text style={styles.workerLabel}>ID de Worker: {workerId ? workerId.substring(0, 8) : '...'}</Text>
         </View>
       </View>
 
@@ -199,18 +218,26 @@ export default function App() {
 
       {/* Connection Status Section */}
       <View style={styles.statusContainer}>
-        <Text style={styles.statusLocation}>MercadoLibre Proxy</Text>
-        <Text style={styles.statusMainText}>{isActive ? 'Connected' : 'Not Connected'}</Text>
+        <Text style={styles.statusLocation}>Túnel Activo</Text>
+        <Text style={styles.statusMainText}>{isActive ? 'Conectado' : 'Desconectado'}</Text>
         <Text style={styles.statusSubText}>{status}</Text>
       </View>
 
       {/* Capsule Toggle Section */}
       <View style={styles.capsuleWrapper}>
-        {isActive && (
+        {isActive && !isProcessing && (
           <View style={styles.radarContainer}>
             <Animated.View style={[styles.radarCircle, { transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 2] }) }], opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }) }]} />
             <Animated.View style={[styles.radarCircle, { transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 2.5] }) }], opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }) }]} />
             <Animated.View style={[styles.radarCircle, { transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 3] }) }], opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0] }) }]} />
+          </View>
+        )}
+
+        {isProcessing && (
+          <View style={styles.radarContainer}>
+            <Animated.View style={[styles.radarCircleProcessing, { transform: [{ scale: pulseProcessingAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 2] }) }], opacity: pulseProcessingAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) }]} />
+            <Animated.View style={[styles.radarCircleProcessing, { transform: [{ scale: pulseProcessingAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 2.5] }) }], opacity: pulseProcessingAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }) }]} />
+            <Animated.View style={[styles.radarCircleProcessing, { transform: [{ scale: pulseProcessingAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 3] }) }], opacity: pulseProcessingAnim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0] }) }]} />
           </View>
         )}
 
@@ -220,7 +247,7 @@ export default function App() {
           
           <Animated.View style={[styles.toggleButtonWrapper, { transform: [{ translateY }] }]}>
             <TouchableOpacity activeOpacity={0.9} onPress={handleToggle} style={styles.toggleButton}>
-              <Text style={styles.toggleButtonText}>{isActive ? 'STOP' : 'START'}</Text>
+              <Text style={styles.toggleButtonText}>{isActive ? 'DETENER' : 'INICIAR'}</Text>
               <View style={[styles.powerIcon, { backgroundColor: isActive ? '#10b981' : '#ffffff' }]} />
             </TouchableOpacity>
           </Animated.View>
@@ -231,7 +258,7 @@ export default function App() {
       </View>
       
       <View style={styles.bottomSpacer}>
-        <Text style={styles.swipeText}>Tap The Button To {isActive ? 'Disconnect' : 'Connect'}</Text>
+        <Text style={styles.swipeText}>Toca el botón para {isActive ? 'Desconectar' : 'Conectar'}</Text>
       </View>
     </LinearGradient>
   );
@@ -324,6 +351,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#10b981',
     borderStyle: 'dashed',
+  },
+  radarCircleProcessing: {
+    position: 'absolute',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 2,
+    borderColor: '#06b6d4', // Cyan 500
+    borderStyle: 'solid',
+    shadowColor: '#06b6d4',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+    elevation: 5,
   },
   capsuleTrack: {
     width: 90,
