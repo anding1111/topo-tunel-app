@@ -1,10 +1,11 @@
 import 'react-native-get-random-values';
-import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, StatusBar, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, StatusBar, Animated, Easing } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import notifee, { EventType } from '@notifee/react-native';
 import WorkerService from './src/services/WorkerService';
+import { LinearGradient } from 'expo-linear-gradient';
 
 // Register foreground service task globally
 notifee.registerForegroundService(() => {
@@ -21,12 +22,38 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
   }
 });
 
+// Helper to format bytes
+const formatBytes = (bytes) => {
+  if (bytes === 0) return '0.0 Kb';
+  const k = 1024;
+  const sizes = ['Bytes', 'Kb', 'Mb', 'Gb'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+// Helper to format time
+const formatTime = (totalSeconds) => {
+  const h = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
+  const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
+  const s = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+};
+
 export default function App() {
   const [workerId, setWorkerId] = useState('');
   const [isActive, setIsActive] = useState(false);
   const [status, setStatus] = useState('Desconectado');
-  const [tasksCompleted, setTasksCompleted] = useState(0);
+  
+  // Metrics
+  const [secondsActive, setSecondsActive] = useState(0);
+  const [bytesSent, setBytesSent] = useState(0);
+  const [bytesReceived, setBytesReceived] = useState(0);
+  
+  // Animations
+  const toggleAnim = useRef(new Animated.Value(0)).current; // 0 = Start (Top), 1 = Stop (Bottom)
+  const pulseAnim = useRef(new Animated.Value(0)).current;
 
+  // Initialize WorkerService
   useEffect(() => {
     const initialize = async () => {
       let id = await AsyncStorage.getItem('worker_id');
@@ -38,7 +65,7 @@ export default function App() {
       
       WorkerService.init(
         id,
-        () => setTasksCompleted(prev => prev + 1),
+        () => {}, // onTaskCompleted no longer needs to drive UI strictly
         (newStatus) => {
           setStatus(newStatus);
           if (newStatus === 'Desconectado') {
@@ -46,6 +73,10 @@ export default function App() {
           } else {
             setIsActive(true);
           }
+        },
+        (sent, received) => {
+          setBytesSent(sent);
+          setBytesReceived(received);
         }
       );
     };
@@ -64,7 +95,44 @@ export default function App() {
     };
   }, []);
 
-  const toggleTunnel = useCallback(async () => {
+  // Timer logic
+  useEffect(() => {
+    let interval = null;
+    if (isActive) {
+      interval = setInterval(() => {
+        setSecondsActive(s => s + 1);
+      }, 1000);
+    } else {
+      setSecondsActive(0);
+    }
+    return () => clearInterval(interval);
+  }, [isActive]);
+
+  // Toggle Animation logic
+  useEffect(() => {
+    Animated.timing(toggleAnim, {
+      toValue: isActive ? 1 : 0,
+      duration: 300,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: false,
+    }).start();
+
+    if (isActive) {
+      Animated.loop(
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 2000,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        })
+      ).start();
+    } else {
+      pulseAnim.setValue(0);
+      pulseAnim.stopAnimation();
+    }
+  }, [isActive]);
+
+  const handleToggle = useCallback(async () => {
     if (isActive) {
       await WorkerService.stop();
     } else {
@@ -72,175 +140,235 @@ export default function App() {
     }
   }, [isActive]);
 
-  const getStatusColor = (currentStatus) => {
-    switch(currentStatus) {
-      case 'Conectado': return '#10b981'; // Emerald 500
-      case 'Procesando Tarea': return '#3b82f6'; // Blue 500
-      case 'Conectando...':
-      case 'Reconectando...': return '#f59e0b'; // Amber 500
-      default: return '#ef4444'; // Red 500
-    }
-  };
+  // Interpolations for Toggle Button Movement
+  // Container height: 200, Button height: 80, Padding: 10
+  // Travel distance = 200 - 80 - 20 = 100
+  const translateY = toggleAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 100],
+  });
+
+  // Background Gradient based on state
+  const bgColors = isActive 
+    ? ['#4a6f62', '#1b2d28', '#111816'] // Active VPN theme (Emerald/Military Green)
+    : ['#2a2d36', '#1a1b21', '#101115']; // Inactive VPN theme (Dark Grey/Slate)
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+    <LinearGradient colors={bgColors} style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor={bgColors[0]} />
       
-      <View style={styles.header}>
-        <Text style={styles.title}>Topo Túnel</Text>
-        <Text style={styles.subtitle}>Worker Distribuido</Text>
+      {/* Top Pill / Worker ID */}
+      <View style={styles.topContainer}>
+        <View style={styles.workerPill}>
+          <Text style={styles.workerLabel}>Worker ID: {workerId ? workerId.substring(0, 8) : '...'}</Text>
+        </View>
       </View>
 
-      <View style={styles.card}>
-        <View style={styles.statusContainer}>
-          <View style={[styles.statusDot, { backgroundColor: getStatusColor(status) }]} />
-          <Text style={styles.statusText}>{status}</Text>
+      {/* Metrics Section */}
+      <View style={styles.metricsContainer}>
+        <Text style={styles.timerText}>{isActive ? formatTime(secondsActive) : '00:00:00'}</Text>
+        <View style={styles.dataContainer}>
+          <Text style={styles.dataText}>↓ {formatBytes(bytesReceived)}</Text>
+          <Text style={styles.dataText}>↑ {formatBytes(bytesSent)}</Text>
         </View>
+      </View>
 
-        {status === 'Procesando Tarea' && (
-          <ActivityIndicator size="small" color="#3b82f6" style={styles.loader} />
+      {/* Connection Status Section */}
+      <View style={styles.statusContainer}>
+        <Text style={styles.statusLocation}>MercadoLibre Proxy</Text>
+        <Text style={styles.statusMainText}>{isActive ? 'Connected' : 'Not Connected'}</Text>
+        <Text style={styles.statusSubText}>{status}</Text>
+      </View>
+
+      {/* Capsule Toggle Section */}
+      <View style={styles.capsuleWrapper}>
+        {isActive && (
+          <View style={styles.radarContainer}>
+            <Animated.View style={[styles.radarCircle, { transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 2] }) }], opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 0] }) }]} />
+            <Animated.View style={[styles.radarCircle, { transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 2.5] }) }], opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] }) }]} />
+            <Animated.View style={[styles.radarCircle, { transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 3] }) }], opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0] }) }]} />
+          </View>
         )}
 
-        <View style={styles.statsContainer}>
-          <Text style={styles.statsLabel}>Tareas Completadas</Text>
-          <Text style={styles.statsValue}>{tasksCompleted}</Text>
-        </View>
+        <View style={styles.capsuleTrack}>
+          {/* Top Indicator */}
+          <View style={[styles.trackIndicator, { opacity: isActive ? 0 : 1 }]} />
+          
+          <Animated.View style={[styles.toggleButtonWrapper, { transform: [{ translateY }] }]}>
+            <TouchableOpacity activeOpacity={0.9} onPress={handleToggle} style={styles.toggleButton}>
+              <Text style={styles.toggleButtonText}>{isActive ? 'STOP' : 'START'}</Text>
+              <View style={[styles.powerIcon, { backgroundColor: isActive ? '#10b981' : '#ffffff' }]} />
+            </TouchableOpacity>
+          </Animated.View>
 
-        <View style={styles.idContainer}>
-          <Text style={styles.idLabel}>Worker ID</Text>
-          <Text style={styles.idValue} selectable>{workerId || 'Cargando...'}</Text>
+          {/* Bottom Indicator */}
+          <View style={[styles.trackIndicator, styles.trackIndicatorBottom, { opacity: isActive ? 1 : 0 }]} />
         </View>
       </View>
-
-      <TouchableOpacity 
-        style={[styles.button, isActive ? styles.buttonActive : styles.buttonInactive]} 
-        onPress={toggleTunnel}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.buttonText}>{isActive ? 'DESACTIVAR TÚNEL' : 'ACTIVAR TÚNEL'}</Text>
-      </TouchableOpacity>
-    </View>
+      
+      <View style={styles.bottomSpacer}>
+        <Text style={styles.swipeText}>Tap The Button To {isActive ? 'Disconnect' : 'Connect'}</Text>
+      </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000', // Pure Black
+    alignItems: 'center',
+    padding: 24,
+    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 20 : 50,
+  },
+  topContainer: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: 40,
+  },
+  workerPill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  workerLabel: {
+    color: '#e2e8f0',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  metricsContainer: {
+    alignItems: 'center',
+    marginBottom: 40,
+    height: 100, // Fixed height to prevent layout jump
+  },
+  timerText: {
+    fontSize: 52,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    fontFamily: 'monospace',
+    letterSpacing: 1,
+  },
+  dataContainer: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  dataText: {
+    color: '#94a3b8',
+    fontSize: 14,
+    fontWeight: '600',
+    marginHorizontal: 12,
+  },
+  statusContainer: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  statusLocation: {
+    color: '#94a3b8',
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  statusMainText: {
+    color: '#ffffff',
+    fontSize: 32,
+    fontWeight: '700',
+  },
+  statusSubText: {
+    color: '#64748b',
+    fontSize: 14,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  capsuleWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
-    paddingTop: StatusBar.currentHeight ? StatusBar.currentHeight + 24 : 40,
-  },
-  header: {
-    marginBottom: 48,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 42,
-    fontWeight: 'bold',
-    color: '#f8fafc', // Slate 50
-    letterSpacing: -1,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#64748b', // Slate 500
-    marginTop: 8,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  card: {
-    backgroundColor: '#0d0d0d', // OLED Dark Gray
-    borderRadius: 24,
-    padding: 32,
+    height: 250,
     width: '100%',
+    position: 'relative',
+  },
+  radarContainer: {
+    position: 'absolute',
     alignItems: 'center',
-    marginBottom: 48,
+    justifyContent: 'center',
+    bottom: 25, // Align with the bottom button position
+  },
+  radarCircle: {
+    position: 'absolute',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 1,
+    borderColor: '#10b981',
+    borderStyle: 'dashed',
+  },
+  capsuleTrack: {
+    width: 90,
+    height: 200,
+    backgroundColor: 'rgba(20, 25, 30, 0.6)',
+    borderRadius: 45,
+    padding: 10,
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.5,
     shadowRadius: 20,
     elevation: 10,
     borderWidth: 1,
-    borderColor: '#1e293b', // Slate 800 subtle border
+    borderColor: 'rgba(255,255,255,0.05)',
   },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
+  trackIndicator: {
+    width: 20,
+    height: 4,
+    backgroundColor: '#10b981',
+    borderRadius: 2,
+    position: 'absolute',
+    top: 20,
   },
-  statusDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    marginRight: 12,
+  trackIndicatorBottom: {
+    top: undefined,
+    bottom: 20,
   },
-  statusText: {
-    fontSize: 22,
-    color: '#f8fafc',
-    fontWeight: '600',
+  toggleButtonWrapper: {
+    width: 70,
+    height: 80,
+    zIndex: 10,
   },
-  loader: {
-    marginBottom: 24,
-  },
-  statsContainer: {
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingBottom: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e293b', // Slate 800 subtle line
+  toggleButton: {
     width: '100%',
-  },
-  statsLabel: {
-    fontSize: 14,
-    color: '#64748b',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  statsValue: {
-    fontSize: 64,
-    fontWeight: 'bold',
-    color: '#10b981', // Emerald 500
-  },
-  idContainer: {
-    alignItems: 'center',
-    width: '100%',
-  },
-  idLabel: {
-    fontSize: 12,
-    color: '#475569', // Slate 600
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  idValue: {
-    fontSize: 12,
-    color: '#64748b',
-    fontFamily: 'monospace',
-  },
-  button: {
-    width: '100%',
-    height: 64,
-    borderRadius: 16,
+    height: '100%',
+    backgroundColor: '#3b454e', // Inner button dark tone
+    borderRadius: 35,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.5,
     shadowRadius: 8,
     elevation: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
-  buttonInactive: {
-    backgroundColor: '#2563eb', // Blue 600
-  },
-  buttonActive: {
-    backgroundColor: '#dc2626', // Red 600
-  },
-  buttonText: {
+  toggleButtonText: {
     color: '#ffffff',
-    fontSize: 18,
+    fontSize: 12,
     fontWeight: 'bold',
+    marginBottom: 8,
     letterSpacing: 1,
   },
+  powerIcon: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: 'transparent', // The background color overrides this
+  },
+  bottomSpacer: {
+    height: 60,
+    justifyContent: 'flex-end',
+  },
+  swipeText: {
+    color: '#64748b',
+    fontSize: 12,
+    letterSpacing: 1,
+  }
 });

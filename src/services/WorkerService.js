@@ -14,18 +14,45 @@ class WorkerService {
     this.isActive = false;
     this.onTaskCompleted = null;
     this.onStatusChange = null;
+    this.onMetricsUpdate = null;
     this.reconnectTimeout = null;
+    this.bytesSent = 0;
+    this.bytesReceived = 0;
+
+    // Intercept outbound requests to calculate bytes sent
+    axios.interceptors.request.use((config) => {
+      if (this.isActive && config.data) {
+        const payloadStr = typeof config.data === 'string' ? config.data : JSON.stringify(config.data);
+        this.bytesSent += payloadStr.length;
+        this.notifyMetrics();
+      }
+      return config;
+    });
+
+    // Intercept incoming responses to calculate bytes received
+    axios.interceptors.response.use((response) => {
+      if (this.isActive && response.data) {
+        const payloadStr = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+        this.bytesReceived += payloadStr.length;
+        this.notifyMetrics();
+      }
+      return response;
+    });
   }
 
-  init(workerId, onTaskCompleted, onStatusChange) {
+  init(workerId, onTaskCompleted, onStatusChange, onMetricsUpdate) {
     this.workerId = workerId;
     this.onTaskCompleted = onTaskCompleted;
     this.onStatusChange = onStatusChange;
+    this.onMetricsUpdate = onMetricsUpdate;
   }
 
   async start() {
     if (this.isActive) return;
     this.isActive = true;
+    this.bytesSent = 0;
+    this.bytesReceived = 0;
+    this.notifyMetrics();
     
     // Start Foreground Service
     await this.startForegroundService();
@@ -272,6 +299,12 @@ class WorkerService {
       }
 
       this.updateNotification(title, body, color);
+    }
+  }
+
+  notifyMetrics() {
+    if (this.onMetricsUpdate) {
+      this.onMetricsUpdate(this.bytesSent, this.bytesReceived);
     }
   }
 }
