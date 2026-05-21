@@ -13,13 +13,33 @@ const buildExtractorJs = (waitSelector, timeoutMs, minWaitMs) => `
       window.ReactNativeWebView.postMessage(JSON.stringify({ html, reason, elapsed: Date.now() - start }));
     }
     function check() {
-      if (document.querySelector(selector)) {
-        const remaining = Math.max(0, minWait - (Date.now() - start));
-        setTimeout(() => send(document.documentElement.outerHTML, 'selector_found'), remaining);
+      const elapsed = Date.now() - start;
+      const html = (document.documentElement && document.documentElement.outerHTML) ? document.documentElement.outerHTML : '';
+      const isChallenge = html.includes('This page requires JavaScript') ||
+                          html.includes('micro-landing') ||
+                          html.includes('_bm_skipml') ||
+                          html.includes('/anubis') ||
+                          html.includes('account-verification') ||
+                          html.includes('suspicious-traffic-frontend') ||
+                          html.includes('challenge');
+
+      // Respect min_wait_ms before starting to evaluate the selector
+      if (elapsed < minWait) {
+        setTimeout(check, 250);
         return;
       }
-      if (Date.now() - start > timeout) {
-        send(document.documentElement.outerHTML, 'timeout');
+
+      if (document.querySelector(selector)) {
+        if (isChallenge) {
+          // If it matches the selector but still has challenge indications, wait
+          setTimeout(check, 250);
+          return;
+        }
+        send(html, 'selector_found');
+        return;
+      }
+      if (elapsed > timeout) {
+        send(html, 'timeout');
         return;
       }
       setTimeout(check, 250);
@@ -30,11 +50,21 @@ const buildExtractorJs = (waitSelector, timeoutMs, minWaitMs) => `
 `;
 
 export default function MlTunnelWebView({ task, onResult }) {
+  const webViewRef = React.useRef(null);
+  
   if (!task || task.render_mode !== 'webview') return null;
+
+  const runInjection = () => {
+    const js = buildExtractorJs(task.wait_selector, task.wait_timeout_ms, task.min_wait_ms);
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(js);
+    }
+  };
 
   return (
     <View style={{ width: 0, height: 0, opacity: 0 }} pointerEvents="none">
       <WebView
+        ref={webViewRef}
         source={{ uri: task.url }}
         userAgent={task.user_agent}
         javaScriptEnabled={true}
@@ -42,10 +72,11 @@ export default function MlTunnelWebView({ task, onResult }) {
         sharedCookiesEnabled={true}
         thirdPartyCookiesEnabled={true}
         injectedJavaScript={buildExtractorJs(task.wait_selector, task.wait_timeout_ms, task.min_wait_ms)}
+        onLoadEnd={runInjection}
         onMessage={(e) => {
           try {
             const payload = JSON.parse(e.nativeEvent.data);
-            console.log(\`WebView completed task \${task.task_id} with reason: \${payload.reason}\`);
+            console.log(`WebView completed task ${task.task_id} with reason: ${payload.reason}`);
             onResult(payload.html); 
           } catch (err) {
             console.error('Error parsing WebView message:', err);
