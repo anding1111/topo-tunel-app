@@ -40,11 +40,12 @@ class WorkerService {
     });
   }
 
-  init(workerId, onTaskCompleted, onStatusChange, onMetricsUpdate) {
+  init(workerId, onTaskCompleted, onStatusChange, onMetricsUpdate, onWebViewRenderRequest) {
     this.workerId = workerId;
     this.onTaskCompleted = onTaskCompleted;
     this.onStatusChange = onStatusChange;
     this.onMetricsUpdate = onMetricsUpdate;
+    this.onWebViewRenderRequest = onWebViewRenderRequest;
   }
 
   async start() {
@@ -218,15 +219,33 @@ class WorkerService {
       // 2. Scrape the URL
       let html;
       try {
-        const scrapeRes = await axios.get(task.url, {
-          headers: {
-            'User-Agent': MOBILE_USER_AGENT,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
-          },
-          timeout: 15000, // 15 seconds timeout
-        });
-        html = scrapeRes.data;
+        if (task.render_mode === 'webview') {
+          if (!this.onWebViewRenderRequest) {
+            throw new Error('WebView renderer not bound');
+          }
+          console.log(`Delegating task ${task.task_id} to WebView...`);
+          html = await new Promise((resolve, reject) => {
+            this.onWebViewRenderRequest(task, (resultHtml) => {
+              if (resultHtml) resolve(resultHtml);
+              else reject(new Error('WebView failed to extract HTML or timed out'));
+            });
+          });
+          // Track approximate bytes received since WebView bypassed Axios interceptor
+          if (html) {
+            this.bytesReceived += html.length;
+            this.notifyMetrics();
+          }
+        } else {
+          const scrapeRes = await axios.get(task.url, {
+            headers: {
+              'User-Agent': task.user_agent || MOBILE_USER_AGENT,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+              'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
+            },
+            timeout: task.wait_timeout_ms || 15000, 
+          });
+          html = scrapeRes.data;
+        }
       } catch (scrapeErr) {
         console.log(`Scraping failed for task ${task.task_id}:`, scrapeErr.message);
         

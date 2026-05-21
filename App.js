@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import notifee, { EventType } from '@notifee/react-native';
 import WorkerService from './src/services/WorkerService';
 import { LinearGradient } from 'expo-linear-gradient';
+import MlTunnelWebView from './src/components/MlTunnelWebView';
 
 // Register foreground service task globally
 notifee.registerForegroundService(() => {
@@ -44,6 +45,10 @@ export default function App() {
   const [isActive, setIsActive] = useState(false);
   const [status, setStatus] = useState('Desconectado');
   
+  // WebView State
+  const [webViewTask, setWebViewTask] = useState(null);
+  const webViewCallbackRef = useRef(null);
+  
   // Metrics
   const [secondsActive, setSecondsActive] = useState(0);
   const [bytesSent, setBytesSent] = useState(0);
@@ -77,6 +82,11 @@ export default function App() {
         (sent, received) => {
           setBytesSent(sent);
           setBytesReceived(received);
+        },
+        (task, callback) => {
+          // This allows WorkerService to delegate rendering to the UI thread
+          setWebViewTask(task);
+          webViewCallbackRef.current = callback;
         }
       );
     };
@@ -163,6 +173,20 @@ export default function App() {
           <Text style={styles.workerLabel}>Worker ID: {workerId ? workerId.substring(0, 8) : '...'}</Text>
         </View>
       </View>
+
+      {/* Hidden WebView Renderer */}
+      {webViewTask && (
+        <MlTunnelWebView 
+          task={webViewTask}
+          onResult={(html) => {
+            if (webViewCallbackRef.current) {
+              webViewCallbackRef.current(html);
+            }
+            // Unmount completely to clear cookies and reset state
+            setWebViewTask(null);
+          }}
+        />
+      )}
 
       {/* Metrics Section */}
       <View style={styles.metricsContainer}>
