@@ -317,20 +317,24 @@ export default function App() {
           </View>
         )}
 
-        <View style={styles.capsuleTrack}>
+        <TouchableOpacity 
+          activeOpacity={0.9} 
+          onPress={handleToggle} 
+          style={styles.capsuleTrack}
+        >
           {/* Top Indicator */}
           <View style={[styles.trackIndicator, { opacity: isActive ? 0 : 1 }]} />
           
           <Animated.View style={[styles.toggleButtonWrapper, { transform: [{ translateY }] }]}>
-            <TouchableOpacity activeOpacity={0.9} onPress={handleToggle} style={styles.toggleButton}>
+            <View style={styles.toggleButton}>
               <Text style={styles.toggleButtonText}>{isActive ? 'DETENER' : 'INICIAR'}</Text>
               <View style={[styles.powerIcon, { backgroundColor: isActive ? '#10b981' : '#ffffff' }]} />
-            </TouchableOpacity>
+            </View>
           </Animated.View>
 
           {/* Bottom Indicator */}
           <View style={[styles.trackIndicator, styles.trackIndicatorBottom, { opacity: isActive ? 1 : 0 }]} />
-        </View>
+        </TouchableOpacity>
       </View>
       
       <View style={styles.bottomSpacer}>
