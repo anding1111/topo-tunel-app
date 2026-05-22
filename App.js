@@ -190,8 +190,7 @@ export default function App() {
     }
     return () => clearInterval(interval);
   }, [isActive]);
-
-  // Toggle Animation logic
+  // Toggle Slide Animation (dependent only on isActive)
   useEffect(() => {
     Animated.timing(toggleAnim, {
       toValue: isActive ? 1 : 0,
@@ -199,8 +198,12 @@ export default function App() {
       easing: Easing.out(Easing.ease),
       useNativeDriver: false,
     }).start();
+  }, [isActive]);
 
-    if (isActive) {
+  // Idle Pulse Radar Animation (dependent on isActive & isProcessing)
+  useEffect(() => {
+    if (isActive && !isProcessing) {
+      pulseAnim.setValue(0);
       Animated.loop(
         Animated.timing(pulseAnim, {
           toValue: 1,
@@ -213,7 +216,7 @@ export default function App() {
       pulseAnim.setValue(0);
       pulseAnim.stopAnimation();
     }
-  }, [isActive]);
+  }, [isActive, isProcessing]);
 
   useEffect(() => {
     if (isProcessing) {
