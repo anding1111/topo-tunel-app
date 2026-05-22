@@ -42,8 +42,11 @@ const formatTime = (totalSeconds) => {
 
 export default function App() {
   const [workerId, setWorkerId] = useState('');
+  // isActive: controlado ÚNICAMENTE por el botón toggle (intención del usuario)
+  // No se altera por reconexiones transitorias de Pusher.
   const [isActive, setIsActive] = useState(false);
-  const [status, setStatus] = useState('Desconectado');
+  // connectionStatus: estado visible de la conexión (texto informativo)
+  const [connectionStatus, setConnectionStatus] = useState('Desconectado');
   
   // WebView State
   const [webViewTask, setWebViewTask] = useState(null);
@@ -59,7 +62,7 @@ export default function App() {
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const pulseProcessingAnim = useRef(new Animated.Value(0)).current;
 
-  const isProcessing = status === 'Procesando Tarea';
+  const isProcessing = connectionStatus === 'Procesando Tarea';
 
   // Initialize WorkerService
   useEffect(() => {
@@ -73,21 +76,19 @@ export default function App() {
       
       WorkerService.init(
         id,
-        () => {}, // onTaskCompleted no longer needs to drive UI strictly
+        () => {}, // onTaskCompleted — no necesita manejar UI
         (newStatus) => {
-          setStatus(newStatus);
-          if (newStatus === 'Desconectado') {
-            setIsActive(false);
-          } else {
-            setIsActive(true);
-          }
+          // Solo actualizar el texto de estado (subtítulo informativo).
+          // NUNCA modificar isActive desde aquí para evitar que
+          // reconexiones transitorias de Pusher reseteen la animación.
+          setConnectionStatus(newStatus);
         },
         (sent, received) => {
           setBytesSent(sent);
           setBytesReceived(received);
         },
         (task, callback) => {
-          // This allows WorkerService to delegate rendering to the UI thread
+          // Permite que WorkerService delegue el render al hilo de UI
           setWebViewTask(task);
           webViewCallbackRef.current = callback;
         }
@@ -163,8 +164,10 @@ export default function App() {
 
   const handleToggle = useCallback(async () => {
     if (isActive) {
+      setIsActive(false); // intención inmediata del usuario → animación responde al instante
       await WorkerService.stop();
     } else {
+      setIsActive(true);  // intención inmediata del usuario
       await WorkerService.start();
     }
   }, [isActive]);
@@ -221,7 +224,7 @@ export default function App() {
       <View style={styles.statusContainer}>
         <Text style={styles.statusLocation}>Túnel Activo</Text>
         <Text style={styles.statusMainText}>{isActive ? 'Conectado' : 'Desconectado'}</Text>
-        <Text style={styles.statusSubText}>{status}</Text>
+        <Text style={styles.statusSubText}>{connectionStatus}</Text>
       </View>
 
       {/* Capsule Toggle Section */}
@@ -260,6 +263,7 @@ export default function App() {
       
       <View style={styles.bottomSpacer}>
         <Text style={styles.swipeText}>Toca el botón para {isActive ? 'Desconectar' : 'Conectar'}</Text>
+        {/* isProcessing se deriva del connectionStatus (no de isActive) para el subtítulo */}
       </View>
     </LinearGradient>
   );
