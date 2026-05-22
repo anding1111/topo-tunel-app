@@ -8,6 +8,70 @@ import WorkerService from './src/services/WorkerService';
 import { LinearGradient } from 'expo-linear-gradient';
 import MlTunnelWebView from './src/components/MlTunnelWebView';
 
+// ── Componente de estado animado tipo terminal ───────────────────────────────
+// Hace fade-out del texto anterior y fade-in del nuevo para cada cambio de estado
+function StatusTicker({ status, isActive }) {
+  const fadeAnim  = useRef(new Animated.Value(1)).current;
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const [displayed, setDisplayed] = useState(status);
+
+  useEffect(() => {
+    // Fade-out + slide-up del texto actual
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: -8, duration: 180, useNativeDriver: true }),
+    ]).start(() => {
+      setDisplayed(status);
+      slideAnim.setValue(8); // viene desde abajo
+      // Fade-in + slide-up al centro
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 0, duration: 220, useNativeDriver: true }),
+      ]).start();
+    });
+  }, [status]);
+
+  // Color del texto según tipo de estado
+  const getStatusColor = (s) => {
+    if (!s) return '#64748b';
+    if (s.includes('✅')) return '#10b981'; // verde — éxito
+    if (s.includes('⚠️')) return '#f59e0b'; // ambar — advertencia
+    if (s.includes('🔄') || s.includes('🔐') || s.includes('🛡️') || s.includes('📦')) return '#06b6d4'; // cian — proceso activo
+    if (s.includes('📤')) return '#818cf8'; // violeta — enviando
+    if (s.includes('📡')) return '#38bdf8'; // azul — recibiendo
+    if (s.includes('⚡') && isActive) return '#10b981'; // verde — idle activo
+    return '#64748b';
+  };
+
+  return (
+    <Animated.Text
+      style={[
+        tickerStyles.text,
+        {
+          color: getStatusColor(displayed),
+          opacity: fadeAnim,
+          transform: [{ translateY: slideAnim }],
+        },
+      ]}
+      numberOfLines={1}
+    >
+      {displayed || (isActive ? '⚡ Conectado — Esperando tareas...' : '—')}
+    </Animated.Text>
+  );
+}
+
+const tickerStyles = StyleSheet.create({
+  text: {
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.4,
+    marginTop: 6,
+    textAlign: 'center',
+    fontFamily: 'monospace',
+  },
+});
+// ──────────────────────────────────────────────────────────────────────────────
+
 // Register foreground service task globally
 notifee.registerForegroundService(() => {
   return new Promise(() => {
@@ -62,7 +126,12 @@ export default function App() {
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const pulseProcessingAnim = useRef(new Animated.Value(0)).current;
 
-  const isProcessing = connectionStatus === 'Procesando Tarea';
+  const isProcessing = connectionStatus !== '' &&
+    connectionStatus !== '⚡ Conectado — Esperando tareas...' &&
+    connectionStatus !== 'Desconectado' &&
+    connectionStatus !== 'Conectado' &&
+    !connectionStatus.includes('✅') &&
+    isActive;
 
   // Initialize WorkerService
   useEffect(() => {
@@ -224,7 +293,7 @@ export default function App() {
       <View style={styles.statusContainer}>
         <Text style={styles.statusLocation}>Túnel Activo</Text>
         <Text style={styles.statusMainText}>{isActive ? 'Conectado' : 'Desconectado'}</Text>
-        <Text style={styles.statusSubText}>{connectionStatus}</Text>
+        <StatusTicker status={connectionStatus} isActive={isActive} />
       </View>
 
       {/* Capsule Toggle Section */}

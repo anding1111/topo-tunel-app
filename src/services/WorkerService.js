@@ -233,7 +233,7 @@ class WorkerService {
     if (!task || !task.task_id || !task.url) return;
     
     console.log(`[Worker] Tarea recibida: ${task.task_id} render_mode=${task.render_mode}`);
-    this.notifyStatus('Procesando Tarea');
+    this.notifyStatus('📡 Nueva consulta recibida...');
 
     try {
       // 1. Claim the task
@@ -245,13 +245,13 @@ class WorkerService {
         });
       } catch (err) {
         console.log(`[Worker] Claim fallido para tarea ${task.task_id}:`, err.message);
-        this.notifyStatus('Conectado');
+        this.notifyStatus('⚡ Conectado — Esperando tareas...');
         return;
       }
 
       if (!claimRes.data || !claimRes.data.success) {
         console.log(`[Worker] Tarea ${task.task_id} ya reclamada por otro worker.`);
-        this.notifyStatus('Conectado');
+        this.notifyStatus('⚡ Conectado — Esperando tareas...');
         return;
       }
 
@@ -263,11 +263,20 @@ class WorkerService {
       // NUNCA usar axios/fetch si render_mode === 'webview'
       let resultPayload;
       if (claimedTask.render_mode === 'webview') {
+        this.notifyStatus('🛡️ Iniciando navegador seguro...');
         console.log(`[Worker] Delegando tarea ${claimedTask.task_id} al WebView...`);
         try {
+          // Actualizar estado luego de un momento para mostrar progreso visual
+          setTimeout(() => {
+            if (this.isActive) this.notifyStatus('🔐 Superando seguridad de ML...');
+          }, 2000);
+          setTimeout(() => {
+            if (this.isActive) this.notifyStatus('📦 Extrayendo listado de productos...');
+          }, 6000);
           resultPayload = await this._enqueueWebView(claimedTask);
         } catch (webviewErr) {
           console.error(`[Worker] WebView falló para ${claimedTask.task_id}:`, webviewErr.message);
+          this.notifyStatus('⚠️ Fallo en extracción — Liberando tarea...');
           // Liberar tarea para que otro worker pueda intentarlo
           try {
             await axios.post(`${API_BASE}/release`, {
@@ -301,6 +310,7 @@ class WorkerService {
       }
 
       // 3. Callback con payload enriquecido
+      this.notifyStatus('📤 Enviando datos al servidor...');
       try {
         const callbackRes = await axios.post(`${API_BASE}/callback`, {
           task_id:     claimedTask.task_id,
@@ -319,7 +329,10 @@ class WorkerService {
         // El backend puede responder 422 si detecta que envié micro-landing
         if (callbackRes.data && callbackRes.data.success === false && callbackRes.data.reason === 'anti_bot_detected') {
           console.warn(`[Worker] Backend rechazó HTML (anti_bot_detected) para tarea ${claimedTask.task_id}. La tarea volverá a la cola.`);
+          this.notifyStatus('🔄 Re-encolado por el servidor...');
         } else {
+          const listingCount = resultPayload.hasListing ? '✅ Scraping exitoso — Listado obtenido' : '✅ Datos enviados correctamente';
+          this.notifyStatus(listingCount);
           console.log(`[Worker] Tarea ${claimedTask.task_id} completada. hasListing=${resultPayload.hasListing}`);
           if (this.onTaskCompleted) this.onTaskCompleted();
         }
@@ -327,8 +340,10 @@ class WorkerService {
         // 422: backend rechazó el HTML (fue micro-landing). La tarea vuelve a pending automáticamente.
         if (callbackErr.response && callbackErr.response.status === 422) {
           console.warn(`[Worker] 422 anti_bot_detected para tarea ${claimedTask.task_id}. El backend re-encola.`);
+          this.notifyStatus('🔄 Seguridad activa — Reintentando...');
         } else {
           console.error(`[Worker] Error en callback para ${claimedTask.task_id}:`, callbackErr.message);
+          this.notifyStatus('⚠️ Error de comunicación con servidor');
         }
       }
 
@@ -336,7 +351,10 @@ class WorkerService {
       console.error(`[Worker] Error general en processTask ${task.task_id}:`, error.message);
     } finally {
       if (this.isActive) {
-        this.notifyStatus('Conectado');
+        // Mostrar éxito brevemente antes de volver al estado idle
+        setTimeout(() => {
+          if (this.isActive) this.notifyStatus('⚡ Conectado — Esperando tareas...');
+        }, 2500);
       }
     }
   }
