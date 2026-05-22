@@ -15,9 +15,14 @@ class WorkerService {
     this.onTaskCompleted = null;
     this.onStatusChange = null;
     this.onMetricsUpdate = null;
+    this.onWebViewRenderRequest = null;
     this.reconnectTimeout = null;
     this.bytesSent = 0;
     this.bytesReceived = 0;
+
+    // ── Cola FIFO: solo una instancia de WebView activa a la vez ──────────
+    this.webviewQueue = [];     // [{task, resolve, reject}]
+    this.webviewBusy  = false;
 
     // Intercept outbound requests to calculate bytes sent
     axios.interceptors.request.use((config) => {
@@ -188,10 +193,46 @@ class WorkerService {
     }
   }
 
+  /**
+   * Encola una tarea WebView y garantiza que solo haya una instancia activa.
+   * Resuelve con el payload enriquecido cuando el WebView termina.
+   */
+  _enqueueWebView(task) {
+    return new Promise((resolve, reject) => {
+      this.webviewQueue.push({ task, resolve, reject });
+      this._drainWebViewQueue();
+    });
+  }
+
+  _drainWebViewQueue() {
+    if (this.webviewBusy || this.webviewQueue.length === 0) return;
+    this.webviewBusy = true;
+    const { task, resolve, reject } = this.webviewQueue.shift();
+
+    if (!this.onWebViewRenderRequest) {
+      this.webviewBusy = false;
+      reject(new Error('WebView renderer not bound'));
+      return;
+    }
+
+    this.onWebViewRenderRequest(task, (resultPayload) => {
+      this.webviewBusy = false;
+      this._drainWebViewQueue(); // procesar siguiente en cola
+      if (resultPayload && resultPayload.html) {
+        // Contabilizar bytes recibidos
+        this.bytesReceived += resultPayload.html.length;
+        this.notifyMetrics();
+        resolve(resultPayload);
+      } else {
+        reject(new Error('WebView no devolvió HTML válido'));
+      }
+    });
+  }
+
   async processTask(task) {
     if (!task || !task.task_id || !task.url) return;
     
-    console.log(`Received task: ${task.task_id}`);
+    console.log(`[Worker] Tarea recibida: ${task.task_id} render_mode=${task.render_mode}`);
     this.notifyStatus('Procesando Tarea');
 
     try {
@@ -203,80 +244,96 @@ class WorkerService {
           worker_id: this.workerId,
         });
       } catch (err) {
-        console.log(`Claim failed for task ${task.task_id}:`, err.message);
+        console.log(`[Worker] Claim fallido para tarea ${task.task_id}:`, err.message);
         this.notifyStatus('Conectado');
-        return; // Ignore silently (409 Conflict o similar)
+        return;
       }
 
       if (!claimRes.data || !claimRes.data.success) {
-        console.log(`Task ${task.task_id} claimed by another worker.`);
+        console.log(`[Worker] Tarea ${task.task_id} ya reclamada por otro worker.`);
         this.notifyStatus('Conectado');
         return;
       }
 
-      console.log(`Task ${task.task_id} successfully claimed. Scraping...`);
+      // Mezclar hints que puede traer la respuesta del claim con los del evento Pusher
+      const claimedTask = { ...task, ...claimRes.data };
+      console.log(`[Worker] Tarea ${claimedTask.task_id} reclamada. render_mode=${claimedTask.render_mode}`);
 
-      // 2. Scrape the URL
-      let html;
-      try {
-        if (task.render_mode === 'webview') {
-          if (!this.onWebViewRenderRequest) {
-            throw new Error('WebView renderer not bound');
-          }
-          console.log(`Delegating task ${task.task_id} to WebView...`);
-          html = await new Promise((resolve, reject) => {
-            this.onWebViewRenderRequest(task, (resultHtml) => {
-              if (resultHtml) resolve(resultHtml);
-              else reject(new Error('WebView failed to extract HTML or timed out'));
-            });
-          });
-          // Track approximate bytes received since WebView bypassed Axios interceptor
-          if (html) {
-            this.bytesReceived += html.length;
-            this.notifyMetrics();
-          }
-        } else {
-          const scrapeRes = await axios.get(task.url, {
-            headers: {
-              'User-Agent': task.user_agent || MOBILE_USER_AGENT,
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-              'Accept-Language': 'es-419,es;q=0.9,en;q=0.8',
-            },
-            timeout: task.wait_timeout_ms || 15000, 
-          });
-          html = scrapeRes.data;
-        }
-      } catch (scrapeErr) {
-        console.log(`Scraping failed for task ${task.task_id}:`, scrapeErr.message);
-        
-        // 2b. Release the task so other workers can retry
+      // 2. Scrape
+      // NUNCA usar axios/fetch si render_mode === 'webview'
+      let resultPayload;
+      if (claimedTask.render_mode === 'webview') {
+        console.log(`[Worker] Delegando tarea ${claimedTask.task_id} al WebView...`);
         try {
-          await axios.post(`${API_BASE}/release`, {
-            task_id: task.task_id,
-            worker_id: this.workerId,
-          });
-          console.log(`Task ${task.task_id} successfully released.`);
-        } catch (releaseErr) {
-          console.error(`Error releasing task ${task.task_id}:`, releaseErr.message);
+          resultPayload = await this._enqueueWebView(claimedTask);
+        } catch (webviewErr) {
+          console.error(`[Worker] WebView falló para ${claimedTask.task_id}:`, webviewErr.message);
+          // Liberar tarea para que otro worker pueda intentarlo
+          try {
+            await axios.post(`${API_BASE}/release`, {
+              task_id: claimedTask.task_id,
+              worker_id: this.workerId,
+            });
+          } catch (_) {}
+          return;
         }
-        return;
+      } else {
+        try {
+          const scrapeRes = await axios.get(claimedTask.url, {
+            headers: {
+              'User-Agent': claimedTask.user_agent || MOBILE_USER_AGENT,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'es-CO,es;q=0.9,en-US;q=0.8,en;q=0.7',
+            },
+            timeout: claimedTask.wait_timeout_ms || 15000,
+          });
+          resultPayload = { html: scrapeRes.data, reason: 'fetch_ok', task_id: claimedTask.task_id, worker_id: this.workerId };
+        } catch (fetchErr) {
+          console.error(`[Worker] Fetch falló para ${claimedTask.task_id}:`, fetchErr.message);
+          try {
+            await axios.post(`${API_BASE}/release`, {
+              task_id: claimedTask.task_id,
+              worker_id: this.workerId,
+            });
+          } catch (_) {}
+          return;
+        }
       }
 
-      // 3. Callback with the HTML
-      await axios.post(`${API_BASE}/callback`, {
-        task_id: task.task_id,
-        worker_id: this.workerId,
-        html: html,
-      });
+      // 3. Callback con payload enriquecido
+      try {
+        const callbackRes = await axios.post(`${API_BASE}/callback`, {
+          task_id:     claimedTask.task_id,
+          worker_id:   this.workerId,
+          html:        resultPayload.html,
+          reason:      resultPayload.reason,
+          elapsed:     resultPayload.elapsed,
+          url:         resultPayload.url,
+          title:       resultPayload.title,
+          len:         resultPayload.len,
+          hasListing:  resultPayload.hasListing,
+          isChallenge: resultPayload.isChallenge,
+          isAccount:   resultPayload.isAccount,
+        });
 
-      console.log(`Task ${task.task_id} completed successfully.`);
-      
-      if (this.onTaskCompleted) {
-        this.onTaskCompleted();
+        // El backend puede responder 422 si detecta que envié micro-landing
+        if (callbackRes.data && callbackRes.data.success === false && callbackRes.data.reason === 'anti_bot_detected') {
+          console.warn(`[Worker] Backend rechazó HTML (anti_bot_detected) para tarea ${claimedTask.task_id}. La tarea volverá a la cola.`);
+        } else {
+          console.log(`[Worker] Tarea ${claimedTask.task_id} completada. hasListing=${resultPayload.hasListing}`);
+          if (this.onTaskCompleted) this.onTaskCompleted();
+        }
+      } catch (callbackErr) {
+        // 422: backend rechazó el HTML (fue micro-landing). La tarea vuelve a pending automáticamente.
+        if (callbackErr.response && callbackErr.response.status === 422) {
+          console.warn(`[Worker] 422 anti_bot_detected para tarea ${claimedTask.task_id}. El backend re-encola.`);
+        } else {
+          console.error(`[Worker] Error en callback para ${claimedTask.task_id}:`, callbackErr.message);
+        }
       }
 
     } catch (error) {
-      console.error(`Error in processTask for ${task.task_id}:`, error.message);
+      console.error(`[Worker] Error general en processTask ${task.task_id}:`, error.message);
     } finally {
       if (this.isActive) {
         this.notifyStatus('Conectado');

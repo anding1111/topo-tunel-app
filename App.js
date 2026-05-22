@@ -197,11 +197,12 @@ export default function App() {
       {webViewTask && (
         <MlTunnelWebView 
           task={webViewTask}
-          onResult={(html) => {
+          workerId={workerId}
+          onResult={(resultPayload) => {
             if (webViewCallbackRef.current) {
-              webViewCallbackRef.current(html);
+              webViewCallbackRef.current(resultPayload);
             }
-            // Unmount completely to clear cookies and reset state
+            // Desmontar completamente al terminar la tarea (no reutilizar instancias)
             setWebViewTask(null);
           }}
         />
